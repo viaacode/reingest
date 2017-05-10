@@ -1,0 +1,22 @@
+# Rabbit MQ configuration
+rabbit.host=
+rabbit.port=
+rabbit.username=
+rabbit.password=
+rabbit.vhost=
+rabbit.zwartruimte.listenqueue=
+rabbit.fxp=
+
+# PID configuration
+pid.host=
+pid.port=
+pid.path=
+
+# FTP configuration voor sidecar ingest
+ftpDestination.host=
+ftpDestination.username=
+ftpDestination.password=
+ftpDestination.subfolder=
+
+# Elasticsearch
+elastic.host=

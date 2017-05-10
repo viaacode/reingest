@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:mulerequester="http://www.mulesoft.org/schema/mule/mulerequester" xmlns:ftp="http://www.mulesoft.org/schema/mule/ee/ftp" xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw" xmlns:mulexml="http://www.mulesoft.org/schema/mule/xml" xmlns:context="http://www.springframework.org/schema/context" xmlns:amqps="http://www.mulesoft.org/schema/mule/amqps" xmlns:amqp="http://www.mulesoft.org/schema/mule/amqp" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:anypoint-mq="http://www.mulesoft.org/schema/mule/anypoint-mq" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/anypoint-mq http://www.mulesoft.org/schema/mule/anypoint-mq/current/mule-anypoint-mq.xsd
+http://www.mulesoft.org/schema/mule/amqp http://www.mulesoft.org/schema/mule/amqp/current/mule-amqp.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/xml http://www.mulesoft.org/schema/mule/xml/current/mule-xml.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/ee/ftp http://www.mulesoft.org/schema/mule/ee/ftp/current/mule-ftp-ee.xsd
+http://www.mulesoft.org/schema/mule/mulerequester http://www.mulesoft.org/schema/mule/mulerequester/current/mule-mulerequester.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd"> 
+    <context:property-placeholder location="${mule.env}.properties"/>
+    <http:request-config name="PID_webservice" host="${pid.host}" port="${pid.port}" basePath="/" doc:name="HTTP Request Configuration" responseTimeout="30000">
+    </http:request-config>
+    <ftp:connector streaming="true" name="FTP" pollingFrequency="1000" validateConnections="true" doc:name="FTP"></ftp:connector>
+<!--     <ftp:connector name="FTP"  validateConnections="true" doc:name="FTP" connectionTimeout="10000"/> -->
+    <http:request-config name="elastic_search" host="${elastic.host}" port="9200" basePath="/" doc:name="HTTP Request Configuration" responseTimeout="30000" usePersistentConnections="false"/>
+    <!-- DATABASE -->
+    <amqp:connector name="RabbitMQConnector" validateConnections="true" host="${rabbit.host}" username="${rabbit.username}" password="${rabbit.password}" ackMode="MANUAL" prefetchCount="1" numberOfChannels="1" doc:name="AMQP-0-9 Connector" virtualHost="${rabbit.vhost}">
+        <reconnect/>
+    </amqp:connector>
+    <flow name="export_mam_avoFlow">
+    <amqp:inbound-endpoint
+			queueName="${rabbit.zwartruimte.listenqueue}"
+			queueDurable="true"
+			connector-ref="RabbitMQConnector"
+			doc:name="Get message from zwartruimte queue"/>
+        <json:json-to-object-transformer returnClass="java.util.HashMap" doc:name="JSON to Object"/>
+        <flow-ref name="init_variables" doc:name="init_variables"/>
+        <flow-ref name="get_original_metadata_from_sidecar" doc:name="get_original_metadata_from_sidecar"/>
+        <flow-ref name="get_new_pid" doc:name="get_new_pid"/>
+        <flow-ref name="map_metadata" doc:name="map_metadata"/>
+        <flow-ref name="transfer_files" doc:name="transfer_files"/>
+        <flow-ref name="delete_original_files" doc:name="delete_original_files"/>
+        <amqp:acknowledge-message doc:name="AMQP-0-9 Acknowledge Message"/>
+        <catch-exception-strategy doc:name="Catch Exception Strategy">
+            <amqp:acknowledge-message doc:name="AMQP-0-9 Acknowledge Message"/>
+        </catch-exception-strategy>
+    </flow>
+    <sub-flow name="init_variables">
+        <set-variable variableName="originalMessage" value="#[payload]" doc:name="Set originalMessage"/>
+        <set-variable variableName="sip_package" value="#[payload.sip_package]" doc:name="Set sip_package"/>
+        <flow-ref name="extract_files" doc:name="extract_files"/>
+        <set-variable variableName="host" value="#[payload.server]" doc:name="Set host"/>
+        <set-variable variableName="username" value="#[payload.username]" doc:name="Set username"/>
+        <set-variable variableName="password" value="#[payload.password]" doc:name="Set password"/>
+        <set-variable variableName="state" value="#[&quot;SIP_DETECTED&quot;]" doc:name="Set state (SIP_DETECTED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+        <logger message="SIP_DETECTED" level="INFO" doc:name="SIP_DETECTED"/>
+    </sub-flow>
+    	<flow name="extract_files" processingStrategy="synchronous" initialState="started">
+        <foreach collection="#[flowVars.sip_package]" doc:name="For Each">
+            <choice doc:name="What is the file type?">
+                <when expression="#[payload.file_type.equals(&quot;essence&quot;)]">
+                    <set-variable variableName="essence" value="#[payload]" doc:name="Set essence"/>
+                </when>
+                <when expression="#[payload.file_type.equals(&quot;sidecar&quot;)]">
+                    <set-variable variableName="sidecar" value="#[payload]" doc:name="Set sidecar"/>
+                </when>
+                <otherwise>
+                    <logger level="INFO" doc:name="File X is not an essence nor a sidecar. Ignore it." message="File #[payload.file_name] is not an essence nor a sidecar. Ignore it."/>
+                </otherwise>
+            </choice>
+        </foreach>
+        <choice doc:name="Have essence and sidecar been set?">
+            <when expression="#[flowVars.essence == null || flowVars.sidecar == null]">
+                <scripting:component doc:name="Essence is or sidecar have not been set, throw error">
+                    <scripting:script engine="Groovy"><![CDATA[throw new java.util.NoSuchElementException("There was no essence file in the package");]]></scripting:script>
+                </scripting:component>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Essence and sidecar were set. Good to go." message="Essence and sidecar were set. Good to go."/>
+            </otherwise>
+        </choice>
+    </flow>
+    <sub-flow name="get_original_metadata_from_sidecar">
+        <mulerequester:request resource="#[&quot;ftp://&quot;+flowVars.username+&quot;:&quot;+flowVars.password+&quot;@&quot;+flowVars.host+&quot;/&quot;+flowVars.sidecar.file_path+&quot;/&quot;+flowVars.sidecar.file_name+&quot;?connector=FTP&quot;]" timeout="10000" throwExceptionOnTimeout="true" metadata:id="9fdf59ad-6c94-40e8-bff4-fac2ecde37a3" doc:name="Read sidecar"/>
+        <!-- 
+        <sftplite:get-file filePath="#[flowVars.filepath+&quot;/&quot;+flowVars.filename + &quot;.xml&quot;]" hostName="#[flowVars.host]" password="#[flowVars.password]" userName="#[flowVars.username]" doc:name="SFTPLite"/>
+        -->
+        <mulexml:dom-to-xml-transformer doc:name="DOM to XML"  />
+        <dw:transform-message doc:name="Extract MediaHAVEN_external_metadata">
+            <dw:set-payload><![CDATA[%dw 1.0
+%input payload application/xml
+%output application/xml
+---
+{
+    MediaHAVEN_external_metadata: payload.mets.dmdSec.mdWrap.xmlData.MediaHAVEN_external_metadata    
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <dw:transform-message doc:name="Make simpler version (disgarding extra metadata features of MH 17.1)">
+            <dw:input-payload doc:sample="sample_data/empty_1.xml"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/xml
+---
+{
+	MediaHAVEN_external_metadata: {
+		(title: payload.MediaHAVEN_external_metadata.title) when payload.MediaHAVEN_external_metadata.title?,
+		(description: payload.MediaHAVEN_external_metadata.description) when payload.MediaHAVEN_external_metadata.description?,
+		(mime_type: payload.MediaHAVEN_external_metadata.mime_type) when payload.MediaHAVEN_external_metadata.mime_type?,
+		(keywords: payload.MediaHAVEN_external_metadata.keywords) when payload.MediaHAVEN_external_metadata.keywords?,
+		MDProperties: payload.MediaHAVEN_external_metadata.MDProperties
+	}
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <mulexml:dom-to-xml-transformer doc:name="DOM to XML"/>
+        <set-variable variableName="original_metadata" value="#[payload]" doc:name="Set original_metadata with MHEM"/>
+        <set-variable variableName="original_pid" value="#[xpath3('//PID/text()')]" doc:name="Set original_pid"/>
+        <set-variable variableName="original_cp" value="#[xpath3('//CP/text()')]" doc:name="Set original_cp"/>
+        <choice doc:name="Choice">
+            <when expression="#[flowVars.original_cp != null &amp;&amp; !flowVars.original_cp.equals(&quot;&quot;)]">
+                <expression-component doc:name="Do nothing"><![CDATA[// Do nothing]]></expression-component>
+            </when>
+            <otherwise>
+                <expression-component doc:name="Expression"><![CDATA[throw new java.lang.RuntimeException("CP was not filled in.");]]></expression-component>
+            </otherwise>
+        </choice>
+        <set-variable variableName="original_md5" value="#[xpath3('//md5_viaa/text()')]" doc:name="Set original_md5"/>
+        <set-variable variableName="original_cp_id" value="#[xpath3('//CP_id/text()')]" doc:name="Set original_cp_id"/>
+        <set-variable variableName="original_ingestspacename" value="#[xpath3('//ingestspacename/text()')]" doc:name="Set original_ingestspacename"/>
+        <set-variable variableName="state" value="MD_OBTAINED" doc:name="Set state (MD_OBTAINED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+        <logger message="MD OBTAINED" level="INFO" doc:name="MD OBTAINED"/>
+    </sub-flow>
+    <sub-flow name="get_new_pid">
+        <http:request config-ref="PID_webservice" path="${pid.path}" method="GET" doc:name="Request pid"/>
+        <json:json-to-object-transformer returnClass="be.viaa.response.PIDIdResponse[]" doc:name="Get generated pid"/>
+        <set-variable variableName="new_pid" value="#[payload[0].id]" doc:name="Set new_pid"/>
+        <set-variable variableName="state" value="#[&quot;PID_OBTAINED&quot;]" doc:name="Set state (PID_OBTAINED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+        <logger message="PID OBTAINED" level="INFO" doc:name="PID OBTAINED"/>
+    </sub-flow>
+    <sub-flow name="map_metadata">
+        <set-payload value="#[flowVars.original_metadata]" doc:name="Set Payload with original_metadata"/>
+        <mulexml:dom-to-xml-transformer doc:name="DOM to XML (because it needs to an object and not a string)"/>
+        <dw:transform-message metadata:id="0118c471-3028-463b-a667-7e79cd43bf6a" doc:name="Create adapted metadata">
+            <dw:input-payload doc:sample="sample_data/empty.xml"/>
+            <dw:input-variable variableName="metadata_no_root"/>
+            <dw:input-variable variableName="generated_pid"/>
+            <dw:input-variable doc:sample="sample_data\empty_2.xml" variableName="pid"/>
+            <dw:input-variable  variableName="metadata" mimeType="application/xml"/>
+            <dw:input-variable  variableName="original_metadata" doc:sample="sample_data/xml.xml"/>
+            <dw:set-payload><![CDATA[%dw 1.0
+%input payload application/xml
+%output application/xml
+---
+{
+	MediaHAVEN_external_metadata:  {
+		// Copy everything except MDProperties
+		(((payload.MediaHAVEN_external_metadata as :array) as :object) map (
+			($) when $ != payload.MediaHAVEN_external_metadata.MDProperties otherwise {}
+		)),
+		"MDProperties": {
+			(payload.MediaHAVEN_external_metadata.*MDProperties map (
+				$
+			)),
+			// Add relation to original PID
+			"dc_relations" @(type: "list"): {
+				is_verwant_aan: flowVars.original_pid
+			}
+		}
+	}
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <mulexml:dom-to-xml-transformer doc:name="DOM to XML"/>
+        <set-variable variableName="new_metadata" value="#[payload.replaceAll('&lt;PID&gt;'+flowVars.original_pid+'&lt;/PID&gt;', '&lt;PID&gt;'+flowVars.new_pid+'&lt;/PID&gt;').replaceAll('&lt;md5&gt;'+flowVars.original_md5+'&lt;/md5&gt;', '').replaceAll('&lt;md5_viaa&gt;'+flowVars.original_md5+'&lt;/md5_viaa&gt;', '').replaceAll('    \n', '')]" doc:name="Set new_metadata by replacing PID, CP and CP_id and deleting MD5 and ingestspacename"/>
+        <set-variable variableName="state" value="#[&quot;METADATA_MAPPED&quot;]" doc:name="Set state (METADATA_MAPPED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+
+        <logger message="METADATA MAPPED" level="INFO" doc:name="METADATA MAPPED"/>
+    </sub-flow>
+    <sub-flow name="transfer_files">
+        <set-payload value="#[flowVars.new_metadata]" doc:name="Set Payload with new_metadata"/>
+        <ftp:outbound-endpoint host="${ftpDestination.host}" port="21" responseTimeout="10000" doc:name="Export new sidecar to destination" password="${ftpDestination.password}" path="#[flowVars.original_cp.toLowerCase() + '${ftpDestination.subfolder}']" user="${ftpDestination.username}" connector-ref="FTP" outputPattern="#[flowVars.new_pid + &quot;.xml&quot;]"/>
+        <set-variable variableName="extension" value="#[org.apache.commons.io.FilenameUtils.getExtension(flowVars.essence.file_name)]" doc:name="Set extension"/>
+        <dw:transform-message doc:name="Create FXP request for essence with delete FALSE (TODO: set TRUE)">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	source_host: flowVars.host,
+	source_path: flowVars.essence.file_path,
+	source_file: flowVars.essence.file_name,
+	source_user: flowVars.username,
+	source_password: flowVars.password,
+	
+	destination_host: p('ftpDestination.host'),
+	destination_path: (lower flowVars.original_cp) ++ p('ftpDestination.subfolder'),
+	destination_file: flowVars.new_pid ++ '.' ++ flowVars.extension,
+	destination_user: p('ftpDestination.username'),
+	destination_password: p('ftpDestination.password'),
+	
+	move: false
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <byte-array-to-string-transformer doc:name="Byte Array to String"/>
+
+        <amqp:outbound-endpoint queueName="${rabbit.fxp}" responseTimeout="10000"   doc:name="Send message to fxp_requests"/>
+        <set-variable variableName="state" value="#[&quot;SIP_DELIVERED&quot;]" doc:name="Set state (SIP_DELIVERED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+        <logger message="SIP DELIVERED" level="INFO" doc:name="SIP DELIVERED"/>
+    </sub-flow>
+    <sub-flow name="delete_original_files">
+        <dw:transform-message doc:name="Create delete request for sidecar">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	host: flowVars.host,
+	file_path: flowVars.sidecar.file_path,
+	file_name: flowVars.sidecar.file_name,
+	username: flowVars.username,
+	password: flowVars.password
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <byte-array-to-string-transformer doc:name="Byte Array to String"/>
+        <amqp:outbound-endpoint queueName="delete_requests_fake" responseTimeout="10000"   doc:name="Send message to delete_requests"/>
+        <set-variable variableName="state" value="#[&quot;SIDECAR_DELETED&quot;]" doc:name="Set state (SIDECAR_DELETED)"/>
+        <flow-ref name="create_es_message" doc:name="create_es_message"/>
+        <logger message="SIDECAR DELETED" level="INFO" doc:name="SIDECAR DELETED"/>
+    </sub-flow>
+    <sub-flow name="create_es_message">
+        <dw:transform-message doc:name="Create message">
+            <dw:set-payload><![CDATA[%dw 1.0
+%output application/json
+---
+{
+	state: flowVars.state,
+	application: 'ZWARTRUIMTE',
+	timestamp:  now as :datetime {format: "yyyy-MM-dd'T'HH:mm:ss.SSSZ"},
+	(tenant: flowVars.tenant) when flowVars.tenant != null,
+	filename: flowVars.essence.file_name,
+	filepath: flowVars.essence.file_path,
+	host: flowVars.host,
+	(original_pid: flowVars.original_pid) when flowVars.original_pid != null,
+	(new_pid: flowVars.new_pid) when flowVars.new_pid != null,
+	(original_metadata: flowVars.original_metadata) when flowVars.original_metadata != null,
+	(new_metadata: flowVars.new_metadata) when flowVars.new_metadata != null
+}]]></dw:set-payload>
+        </dw:transform-message>
+        <byte-array-to-string-transformer doc:name="Byte Array to String"/>
+        <flow-ref name="log_elastic_search" doc:name="log_elastic_search"/>
+    </sub-flow>
+    <sub-flow name="log_elastic_search">
+        <logger message="#[payload]" level="INFO" doc:name="Debug message"/>
+        <http:request config-ref="elastic_search" path="zwartruimte/events" method="POST" doc:name="POST event to ES"/>
+    </sub-flow>
+</mule>
