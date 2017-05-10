@@ -44,6 +44,8 @@ http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/m
         <amqp:acknowledge-message doc:name="AMQP-0-9 Acknowledge Message"/>
         <catch-exception-strategy doc:name="Catch Exception Strategy">
             <amqp:acknowledge-message doc:name="AMQP-0-9 Acknowledge Message"/>
+            <set-variable variableName="state" value="FAILED" doc:name="Set state (FAILED)"/>
+            <flow-ref name="create_es_message" doc:name="create_es_message"/>
         </catch-exception-strategy>
     </flow>
     <sub-flow name="init_variables">
